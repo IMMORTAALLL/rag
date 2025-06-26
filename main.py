@@ -4,6 +4,11 @@ import numpy as np
 import json
 from dotenv import load_dotenv
 import requests
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
 
 
 load_dotenv()
@@ -98,6 +103,34 @@ def generate_response(system_prompt, user_message):
 
     return content
 
+global_text_chunks = None
+global_embeddings = None
+
+class QuestionRequest(BaseModel):
+    question: str
+
+
+@app.post("/ask")
+def ask(request: QuestionRequest):
+    question = request.question
+    if global_text_chunks is None or global_embeddings is None:
+        return {"answer": "错误: 没有加载文档，请先启动服务"}
+
+    top_chunks = semantic_search(question, global_text_chunks, global_embeddings, 10)
+
+    system_prompt = "你是一名 AI 助手，能够严格按照给定的上下文生成回答。如果无法直接根据给定的上下文生成回答，仅输出'抱歉，RAG知识库中暂无相关信息'"
+
+    user_prompt = "\n".join(
+        [f"Context {i + 1}:\n{chunk}\n=====================================\n" for i, chunk in enumerate(top_chunks)])
+    user_prompt = f"{user_prompt}\nQuestion: {question}"
+
+    # 生成回答
+    ai_response = generate_response(system_prompt, user_prompt)
+
+    return {"answer": ai_response}
+
+
+
 
 if __name__ == "__main__":
     #pdf_path = "data/test_document.pdf"
@@ -109,17 +142,10 @@ if __name__ == "__main__":
     for i in range(len(text_chunks)):
         response.append(create_embeddings(text_chunks[i]))
 
-    query = "介绍一下beijingshi"
+    global_text_chunks = text_chunks
+    global_embeddings = response
 
-    top_chunks = semantic_search(query, text_chunks, response, 5)
-    print(top_chunks[0])
+    print(f"共生成 {len(global_text_chunks)} 个文本块")
+    print("RAG系统启动成功")
 
-    system_prompt = "你是一名 AI 助手，能够严格按照给定的上下文生成回答。如果无法直接根据给定的上下文生成回答，仅输出'抱歉，RAG知识库中暂无相关信息'"
-
-    user_prompt = "\n".join(
-        [f"Context {i + 1}:\n{chunk}\n=====================================\n" for i, chunk in enumerate(top_chunks)])
-    user_prompt = f"{user_prompt}\nQuestion: {query}"
-    print(user_prompt)
-
-    ai_response = generate_response(system_prompt, user_prompt)
-    print(ai_response)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
